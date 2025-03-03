@@ -1,0 +1,571 @@
+//code of the pipelined processor
+module FetchRegisterFile(clk, rst, PCSrcE, PCTargetE, InstrD, PCD, PCPlus4D);
+    // Declare input & outputs
+    input clk, rst;
+    input PCSrcE;
+    input [31:0] PCTargetE;
+    output [31:0] InstrD;
+    output [31:0] PCD, PCPlus4D;
+
+    // Declaring interim wires
+    wire [31:0] PC_F, PCF, PCPlus4F;
+    wire [31:0] InstrF;
+
+    // Declaration of Register
+    reg [31:0] InstrF_reg;
+    reg [31:0] PCF_reg, PCPlus4F_reg;
+
+
+    // Instantiate PC MUX
+   PCMUX mux(
+.a(PCPlus4F),
+.b(PCTargetE),
+.s(PCSrcE),
+.c(PC_F));
+
+    // Instantiate Program Counter
+    ProgramCounter PC_inst (
+        .clk(clk),
+        .rst(rst),
+        .PC(PCF),         // Output of ProgramCounter
+        .PC_Next(PC_F) // Input to ProgramCounter is PCMuxOut
+    );
+
+    // Instantiate Instruction Memory
+    InstructionMemory InstructionMemory_inst (
+        .rst(rst),
+        .A(PCF),
+        .RD(InstrF)
+    );
+
+    // Instantiate Corrected PC Adder
+    ADDER ADDER_inst (
+        .A(PCF),            // Current PC value
+        .B(32'h00000004),    // Constant 4 (for PC increment)
+        .Sum(PCPlus4F)       // Sum output connected to PCPlus4F
+    );
+
+// Fetch Cycle Register Logic
+always @(posedge clk or negedge rst) begin
+    if (rst == 1'b0) begin
+        InstrF_reg <= 32'h00000000;
+        PCF_reg <= 32'h00000000;
+        PCPlus4F_reg <= 32'h00000000;
+    end
+    else begin
+        InstrF_reg <= InstrF;
+        PCF_reg <= PCF;
+        PCPlus4F_reg <= PCPlus4F;
+    end
+end
+
+// Assigning Registers Value to the Output port
+assign InstrD = (rst == 1'b0) ? 32'h00000000 : InstrF_reg;
+assign PCD = (rst == 1'b0) ? 32'h00000000 : PCF_reg;
+assign PCPlus4D = (rst == 1'b0) ? 32'h00000000 : PCPlus4F_reg;
+
+endmodule
+
+//decode stage
+module DecodeStage(clk, rst, InstrD, PCD, PCPlus4D, RegWriteW, RDW, ResultW, RegWriteE, ALUSrcE, MemWriteE, ResultSrcE, BranchE,JumpE, ALUControlE, RD1_E, RD2_E, Imm_Ext_E, RD_E, PCE, PCPlus4E, RS1_E, RS2_E);
+
+// Declaring I/O
+input clk, rst, RegWriteW;
+input [4:0] RDW;
+input [31:0] InstrD, PCD, PCPlus4D, ResultW;
+
+output RegWriteE, ALUSrcE, MemWriteE, ResultSrcE, BranchE,JumpE;
+output [2:0] ALUControlE;
+output [31:0] RD1_E, RD2_E, Imm_Ext_E;
+output [31:0] PCE, PCPlus4E;
+output [4:0] RS1_E, RS2_E, RD_E;
+
+// Declare Interim Wires
+wire RegWriteD, ALUSrcD, MemWriteD, ResultSrcD, BranchD,JumpD;
+wire[1:0]ImmSrcD;
+wire [2:0] ALUControlD;
+wire [31:0] RD1_D, RD2_D, Imm_Ext_D;
+
+// Declaration of Interim Register
+reg RegWriteD_r, ALUSrcD_r, MemWriteD_r, ResultSrcD_r, BranchD_r,JumpD_r;
+reg [2:0] ALUControlD_r;
+reg [31:0] RD1_D_r, RD2_D_r, Imm_Ext_D_r;
+reg [31:0] PCD_r, PCPlus4D_r;
+reg [4:0] RD_D_r, RS1_D_r, RS2_D_r;
+
+// Control Unit
+ControlUnit control (
+    .Op(InstrD[6:0]),
+    .RegWrite(RegWriteD),
+    .ImmSrc(ImmSrcD),
+    .ALUSrc(ALUSrcD),
+    .MemWrite(MemWriteD),
+    .ResultSrc(ResultSrcD),
+    .Branch(BranchD),
+	 .Jump(JumpD),
+    .funct3(InstrD[14:12]),
+    .funct7(InstrD[31:25]),
+    .ALUControl(ALUControlD)
+);
+
+// Register File
+RegisterFile rf (
+    .clk(clk),
+    .rst(rst),
+    .WE3(RegWriteW),
+    .WD3(ResultW),
+    .A1(InstrD[19:15]),
+    .A2(InstrD[24:20]),
+    .A3(RDW),
+    .RD1(RD1_D),
+    .RD2(RD2_D)
+);
+
+// Sign Extension
+Extender extension (
+    .In(InstrD[31:0]),
+    .Imm_Ext(Imm_Ext_D),
+    .ImmSrc(ImmSrcD)
+);
+always @(posedge clk or negedge rst) 
+begin
+    if (rst == 1'b0) begin
+        RegWriteD_r <= 1'b0;
+        ALUSrcD_r <= 1'b0;
+        MemWriteD_r <= 1'b0;
+        ResultSrcD_r <= 1'b0;
+        BranchD_r <= 1'b0;
+		  JumpD_r <= 1'b0;
+        ALUControlD_r <= 3'b000;
+        RD1_D_r <= 32'h00000000;
+        RD2_D_r <= 32'h00000000;
+        Imm_Ext_D_r <= 32'h00000000;
+        RD_D_r <= 5'h00;
+        PCD_r <= 32'h00000000;
+        PCPlus4D_r <= 32'h00000000;
+        RS1_D_r <= 5'h00;
+        RS2_D_r <= 5'h00;
+    end
+	else begin
+    RegWriteD_r <= RegWriteD;
+    ALUSrcD_r <= ALUSrcD;
+    MemWriteD_r <= MemWriteD;
+    ResultSrcD_r <= ResultSrcD;
+    BranchD_r <= BranchD;
+	 JumpD_r<= JumpD;
+    ALUControlD_r <= ALUControlD;
+    RD1_D_r <= RD1_D;
+    RD2_D_r <= RD2_D;
+    Imm_Ext_D_r <= Imm_Ext_D;
+    RD_D_r <= InstrD[11:7];
+    PCD_r <= PCD;
+    PCPlus4D_r <= PCPlus4D;
+    RS1_D_r <= InstrD[19:15];
+    RS2_D_r <= InstrD[24:20];
+	end
+end
+ // Output assign statements
+ assign RegWriteE = RegWriteD_r;
+ assign ALUSrcE = ALUSrcD_r;
+ assign MemWriteE = MemWriteD_r;
+ assign ResultSrcE = ResultSrcD_r;
+ assign BranchE = BranchD_r;
+ assign JumpE = JumpD_r;
+ assign ALUControlE = ALUControlD_r;
+ assign RD1_E = RD1_D_r;
+ assign RD2_E = RD2_D_r;
+ assign Imm_Ext_E = Imm_Ext_D_r;
+ assign RD_E = RD_D_r;
+ assign PCE = PCD_r;
+ assign PCPlus4E = PCPlus4D_r;
+ assign RS1_E = RS1_D_r;
+ assign RS2_E = RS2_D_r;
+endmodule
+
+//execute cycle
+module ExecuteStageModule(clk, rst, RegWriteE, ALUSrcE, MemWriteE, ResultSrcE, BranchE,JumpE, ALUControlE,
+                     RD1_E, RD2_E, Imm_Ext_E,RD_E,PCE, PCPlus4E,PCSrcE,PCTargetE, RegWriteM, MemWriteM, ResultSrcM, RD_M, PCPlus4M, WriteDataM, ALU_ResultM, ResultW, ForwardA_E, ForwardB_E);
+
+    // Declaration of I/O
+    input clk, rst;
+    input RegWriteE, ALUSrcE, MemWriteE, ResultSrcE, BranchE,JumpE;
+    input [2:0] ALUControlE;
+    input [31:0] RD1_E, RD2_E, Imm_Ext_E;
+	 input wire [4:0] RD_E;
+	 input [31:0] ResultW;
+    input [31:0] PCPlus4E, PCE;
+    input [1:0] ForwardA_E, ForwardB_E;
+
+    output PCSrcE, RegWriteM, MemWriteM, ResultSrcM;
+    output wire [4:0] RD_M;
+    output [31:0] PCPlus4M, WriteDataM, ALU_ResultM;
+	 output [31:0] PCTargetE;
+
+    // Declaration of Internal Wires
+    wire [31:0] Src_A, Src_B_Interim, Src_B;
+	 wire ZeroE,PCSrcE_Wire,PCSrcE_Wire_1;
+    wire [31:0] ResultE;
+	
+
+    // Declaration of Register
+    reg RegWriteE_r, MemWriteE_r, ResultSrcE_r;
+    reg [4:0] RD_E_r;
+	 reg  [31:0] PCPlus4E_r,RD2_E_r;
+	 reg [31:0]ResultE_r;
+
+
+	// ALU Unit
+	
+	assign Src_A = RD1_E;
+	assign Src_B = RD2_E;
+	
+	    // Declaration of Modules
+    // ALU Src Mux
+    MUX mux_alu (
+        .a(RD2_E),
+        .b(Imm_Ext_E),
+        .s(ALUSrcE),
+        .c(Src_B_Interim)
+    );
+	 
+ALU alu (
+    .A(Src_A),
+    .B(Src_B_Interim),
+    .Result(ResultE),
+    .ALUControl(ALUControlE),
+    .OverFlow(),
+    .Carry(),
+    .Zero(ZeroE),
+    .Negative()
+);
+
+// Adder
+ADDER branch_adder (
+    .A(PCE),
+    .B(Imm_Ext_E),
+    .Sum(PCTargetE)
+);
+
+//And//
+ANDGate and_gate(
+	.a(ZeroE),
+	.b(BranchE),
+	.y(PCSrcE_Wire)
+);
+ORGate or_gate(
+	.a(PCSrcE_Wire),.b(JumpE), .y(PCSrcE));
+
+
+
+// Register Logic
+always @(posedge clk or negedge rst) begin
+    if (rst == 1'b0) begin
+        RegWriteE_r <= 1'b0;
+        MemWriteE_r <= 1'b0;
+        ResultSrcE_r <= 1'b0;
+        RD_E_r <= 5'h00;
+        PCPlus4E_r <= 32'h00000000;
+        RD2_E_r <= 32'h00000000;
+        ResultE_r <= 32'h00000000;
+    end
+    else begin
+        RegWriteE_r <= RegWriteE;
+        MemWriteE_r <= MemWriteE;
+        ResultSrcE_r <= ResultSrcE;
+        RD_E_r <= RD_E;
+        PCPlus4E_r <= PCPlus4E;
+        RD2_E_r <= Src_B_Interim;
+        ResultE_r <= ResultE;
+    end
+end
+
+	//assign ResultE_r = ResultE;
+	assign PCSrcE_Wire_1 = ZeroE & BranchE;
+	assign RegWriteM = RegWriteE_r;
+	assign MemWriteM = MemWriteE_r;
+	assign ResultSrcM = ResultSrcE_r;
+	assign RD_M = RD_E_r; 	
+	assign PCPlus4M = PCPlus4E_r;
+	assign WriteDataM = RD2_E_r;
+	assign ALU_ResultM = ResultE_r;
+
+endmodule
+
+//memory stage
+//////////////////////////////////////////////////////////////////////////////////
+module MemoryStageRegister(clk, rst, RegWriteM, MemWriteM, ResultSrcM, RD_M, PCPlus4M, WriteDataM,
+                    ALU_ResultM, RegWriteW, ResultSrcW, RD_W, PCPlus4W, ALU_ResultW, ReadDataW);
+
+    // Declaration of I/Os
+    input clk, rst, RegWriteM, MemWriteM, ResultSrcM;
+    input [4:0] RD_M;
+    input [31:0] PCPlus4M, WriteDataM, ALU_ResultM;
+
+    output RegWriteW;
+	 output[1:0]ResultSrcW;
+    output [4:0] RD_W;
+    output [31:0] PCPlus4W, ALU_ResultW, ReadDataW;
+
+    // Declaration of Interim Wires
+    wire [31:0] ReadDataM;
+
+    // Declaration of Interim Registers
+    reg RegWriteM_r, ResultSrcM_r;
+    reg [4:0] RD_M_r;
+    reg [31:0] PCPlus4M_r, ALU_ResultM_r, ReadDataM_r;
+
+    // Declaration of Module Initiation
+    DataMemory dmem (
+        .clk(clk),
+        .rst(rst),
+        .WE(MemWriteM),
+        .WD(WriteDataM),
+        .A(ALU_ResultM),
+        .RD(ReadDataM)
+    );
+
+    // Memory Stage Register Logic
+    always @(posedge clk or negedge rst) begin
+        if (rst == 'b0) begin
+            RegWriteM_r <= 1'b0;
+            ResultSrcM_r <= 1'b0;
+            RD_M_r <= 5'h00;
+            PCPlus4M_r <= 32'h00000000;
+            ALU_ResultM_r <= 32'h00000000;
+            ReadDataM_r <= 32'h00000000;
+        end else begin
+            RegWriteM_r <= RegWriteM;
+            ResultSrcM_r <= ResultSrcM;
+            RD_M_r <= RD_M;
+            PCPlus4M_r <= PCPlus4M;
+            ALU_ResultM_r <= ALU_ResultM;
+            ReadDataM_r <= ReadDataM;
+        end
+    end
+
+    // Declaration of output assignments
+    assign RegWriteW = RegWriteM_r;
+    assign ResultSrcW = ResultSrcM_r;
+    assign RD_W = RD_M_r;
+    assign PCPlus4W = PCPlus4M_r;
+    assign ALU_ResultW = ALU_ResultM_r;
+    assign ReadDataW = ReadDataM_r;
+
+endmodule
+
+//Write Back stage
+module WriteBackStage(clk, rst, ResultSrcW, PCPlus4W, ALU_ResultW, ReadDataW, ResultW);
+
+  // Declaration of I/Os
+  input clk, rst;
+  input [1:0]ResultSrcW;
+  input [31:0] PCPlus4W, ALU_ResultW, ReadDataW;
+  output [31:0] ResultW;
+
+  // Declaration of Module Instantiation
+  MUX3X1 result_mux (
+    .a(ALU_ResultW),
+    .b(ReadDataW),
+	 .c(PCPlus4W),
+    .s(ResultSrcW),
+    .out(ResultW)
+  );
+  endmodule
+
+
+//top module(Pipelined Processor)
+module PipelineProcessor(
+    input clk,
+    input rst,
+    output [31:0] ResultW
+);
+
+    // Instruction Fetch Stage
+    wire PCSrcE;
+    wire [31:0] PCTargetE;
+    wire [31:0] InstrD;
+    wire [31:0] PCD;
+    wire [31:0] PCPlus4D;
+	 wire [31:0] PCPlus4M;
+
+    FetchRegisterFile IF_Stage (
+        .clk(clk), 
+        .rst(rst), 
+        .PCSrcE(PCSrcE), 
+        .PCTargetE(PCTargetE), 
+        .InstrD(InstrD), 
+        .PCD(PCD), 
+        .PCPlus4D(PCPlus4D)
+    );
+
+    // Decode Stage
+    wire RegWriteW;
+    wire [4:0] RDW;
+   // wire [31:0] ResultW;
+    wire RegWriteE;
+    wire ALUSrcE;
+    wire MemWriteE;
+    wire ResultSrcE;
+    wire BranchE;
+    wire [2:0] ALUControlE;
+    wire [31:0] RD1_E, RD2_E, Imm_Ext_E;
+    wire [4:0] RS1_E, RS2_E, RD_E;
+    wire [31:0] PCE, PCPlus4E;
+
+    DecodeStage ID_Stage (
+        .clk(clk), 
+        .rst(rst), 
+        .InstrD(InstrD), 
+        .PCD(PCD), 
+        .PCPlus4D(PCPlus4D), 
+        .RegWriteW(RegWriteW), 
+        .RDW(RDW), 
+        .ResultW(ResultW), 
+        .RegWriteE(RegWriteE), 
+        .ALUSrcE(ALUSrcE), 
+        .MemWriteE(MemWriteE), 
+        .ResultSrcE(ResultSrcE), 
+        .BranchE(BranchE), 
+        .ALUControlE(ALUControlE), 
+        .RD1_E(RD1_E), 
+        .RD2_E(RD2_E), 
+        .Imm_Ext_E(Imm_Ext_E), 
+        .RS1_E(RS1_E), 
+        .RS2_E(RS2_E), 
+        .RD_E(RD_E), 
+        .PCE(PCE), 
+        .PCPlus4E(PCPlus4E),
+		  .JumpE(JumpE)
+    );
+
+    // Execution Stage
+    wire MemWriteM;
+    wire [31:0] ALU_ResultM, WriteDataM;
+    wire [4:0] RD_M;
+
+    ExecuteStageModule EX_Stage (
+        .clk(clk), 
+        .rst(rst), 
+        .RegWriteE(RegWriteE), 
+        .ALUSrcE(ALUSrcE), 
+        .MemWriteE(MemWriteE), 
+        .ResultSrcE(ResultSrcE), 
+        .BranchE(BranchE), 
+        .ALUControlE(ALUControlE), 
+        .RD1_E(RD1_E), 
+        .RD2_E(RD2_E), 
+        .Imm_Ext_E(Imm_Ext_E), 
+        .RD_E(RD_E), 
+        .PCE(PCE), 
+        .PCPlus4E(PCPlus4E), 
+        .PCSrcE(PCSrcE), 
+        .PCTargetE(PCTargetE), 
+        .RegWriteM(RegWriteM), 
+        .MemWriteM(MemWriteM), 
+        .ResultSrcM(ResultSrcM), 
+        .RD_M(RD_M), 
+        .PCPlus4M(PCPlus4M), 
+        .WriteDataM(WriteDataM), 
+        .ALU_ResultM(ALU_ResultM), 
+        .ForwardA_E(2'b00), // Assuming no forwarding logic included yet
+        .ForwardB_E(2'b00),
+		  .JumpE(JumpE),
+		  .ResultW(ResultW)
+    );
+
+    // Memory Stage
+    wire [1:0]ResultSrcW;
+    wire [31:0] PCPlus4W, ALU_ResultW, ReadDataW;
+	 wire [4:0] RD_W;
+    MemoryStageRegister MEM_Stage (
+        .clk(clk), 
+        .rst(rst), 
+        .RegWriteM(RegWriteM), 
+        .MemWriteM(MemWriteM), 
+        .ResultSrcM(ResultSrcM), 
+        .RD_M(RD_M), 
+        .PCPlus4M(PCPlus4M), 
+        .WriteDataM(WriteDataM), 
+        .ALU_ResultM(ALU_ResultM), 
+        .RegWriteW(RegWriteW), 
+        .ResultSrcW(ResultSrcW), 
+        .RD_W(RDW), 
+        .PCPlus4W(PCPlus4W), 
+        .ALU_ResultW(ALU_ResultW), 
+        .ReadDataW(ReadDataW)
+    );
+
+    // Writeback Stage
+    WriteBackStage WB_Stage (
+        .clk(clk), 
+        .rst(rst), 
+        .ResultSrcW(ResultSrcW), 
+        .PCPlus4W(PCPlus4W), 
+        .ALU_ResultW(ALU_ResultW), 
+        .ReadDataW(ReadDataW), 
+        .ResultW(ResultW)
+    );
+	 endmodule
+	 
+//test bench
+////////////////////////////////////////////////////////////////////////////////
+module Tb_PipelineProcessor;
+
+    // Testbench signals
+    reg clk, rst;
+    wire [31:0] ResultW;
+
+    // Instantiate the PipelineProcessor module
+    PipelineProcessor uut (
+        .clk(clk),
+        .rst(rst),
+        .ResultW(ResultW)
+    );
+
+    // Clock generation
+    always begin
+        #10 clk = ~clk; // 10ns clock period
+    end
+
+    // Initial block for stimulus
+    initial begin
+        // Initialize signals
+        clk = 0;
+        //rst = 0;
+
+        // Apply reset
+        //#10 rst = 1;
+        #10 rst = 0; // Release reset after 10ns
+
+        // Apply test stimulus
+        #10; // Wait for clock to stabilize
+		  rst=1;
+        
+        // Test case 1: Simple instruction sequence
+        // Here you may want to include logic to provide stimulus for the pipeline, such as instruction fetch, etc.
+        
+        // Test case 2: Check result propagation after a few clock cycles
+        #20; // Let a few cycles go by
+        
+        // Test case 3: Verifying correct behavior when switching between ALU and Memory operations
+        // You could simulate a branch instruction, jump, or memory write by adjusting the control signals.
+        
+        // Stop simulation after a few cycles
+        #50;
+    end
+
+    // Monitor and display results at each stage
+    always @(posedge clk) begin
+        // Display the state after each pipeline stage
+		  // Example of how to fetch instructions manually in the testbench
+
+    #10;
+//    $display("Instruction at address 0: %h", InstructionMemory[0]);
+//    $display("Instruction at address 4: %h", InstructionMemory[1]);
+//    $display("Instruction at address 8: %h", InstructionMemory[2]);
+        $display("At time %t:", $time);
+        $display("  Reset: %b", rst);
+        $display("  ResultW (Writeback stage output): %h", ResultW);
+    end
+
+endmodule
